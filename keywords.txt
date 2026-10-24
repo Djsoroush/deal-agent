@@ -1,0 +1,7 @@
+# One interest per line. Change from Telegram with /add and /remove.
+airpods
+laptop
+iphone
+shoes
+jd sports
+running shoes
