@@ -1,5 +1,5 @@
 """
-Soroush Deal Agent (cloud version)
+Sheytoon Deal Agent (cloud version)
 
 Runs on GitHub Actions every ~10 minutes:
   1. Reads your Telegram commands (/add, /remove, /list, /help)
@@ -39,7 +39,7 @@ HEADERS = {
 }
 
 HELP = (
-    "🤖 Soroush Deal Agent commands:\n"
+    "🤖 Sheytoon Deal Agent commands:\n"
     "/add word  - follow a new interest (e.g. /add ps5)\n"
     "/remove word - stop following it\n"
     "/list - show your interests\n"
