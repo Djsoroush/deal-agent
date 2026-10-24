@@ -45,6 +45,8 @@ HELP = (
     "/list - show your interests\n"
     "/block word - ignore deals with this word\n"
     "/unblock word - stop ignoring it\n"
+    "/test word - search current deals now (e.g. /test shoes)\n"
+    "/test - search current deals for ALL your interests\n"
     "/help - show this message\n\n"
     "Changes apply at the next check (within ~10 minutes)."
 )
@@ -97,6 +99,9 @@ def send(text):
         print("Telegram error:", e)
 
 
+TEST_REQUESTS = []
+
+
 def handle_commands(state):
     """Read new Telegram messages and update keywords."""
     try:
@@ -146,6 +151,8 @@ def handle_commands(state):
             if arg in exclude:
                 exclude.remove(arg); changed = True
             send(f"👍 '{arg}' is no longer blocked.")
+        elif cmd == "/test":
+            TEST_REQUESTS.append(arg)
         elif cmd == "/list":
             kw = "\n".join(f"• {k}" for k in keywords) or "(none: you get ALL deals)"
             ex = ", ".join(exclude) or "(none)"
@@ -163,6 +170,38 @@ def handle_commands(state):
 def contains_any(text, words):
     text = text.lower()
     return any(re.search(r"\b" + re.escape(w.lower()) + r"\b", text) for w in words)
+
+
+def fetch_all():
+    """Return (title, link, id) for every post in the feeds right now."""
+    posts = []
+    for url in FEEDS:
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+            entries = feedparser.parse(resp.content).entries
+        except Exception as e:
+            print(f"Could not read {url}: {e}")
+            continue
+        for e in entries:
+            posts.append(((e.get("title") or "").strip(), e.get("link", ""), e.get("id") or e.get("link")))
+    return posts
+
+
+def test_search(word):
+    """Send current deals matching `word` (or all interests if empty), even if already seen."""
+    words = [word] if word else read_list(KEYWORDS_FILE)
+    posts = fetch_all()
+    hits = [(t, l) for t, l, _ in posts if words and contains_any(t, words)]
+    label = f"'{word}'" if word else "your interests"
+    print(f"Test search for {label}: {len(hits)} hit(s) in {len(posts)} posts")
+    if not hits:
+        send(f"🧪 Test: checked {len(posts)} current deals - nothing matches {label} right now.")
+        return
+    send(f"🧪 Test: {len(hits)} current deal(s) match {label}:")
+    for t, l in hits:
+        send(f"🔥 {t}\n{l}")
+        time.sleep(1)
 
 
 def check_deals(state):
@@ -209,6 +248,11 @@ def main():
         raise SystemExit("Missing TELEGRAM_TOKEN or TELEGRAM_CHAT_ID secret.")
     state = load_state()
     handle_commands(state)
+    manual = os.environ.get("TEST_SEARCH", "").strip().lower()
+    if manual:
+        TEST_REQUESTS.append("" if manual == "all" else manual)
+    for w in TEST_REQUESTS:
+        test_search(w)
     check_deals(state)
     save_state(state)
 
