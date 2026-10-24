@@ -93,7 +93,7 @@ This project started as a local Python script on Windows, then moved to GitHub A
 
 ## 👤 Author
 
-**Soroush Reaisi** — Montreal, Canada · Concordia University
+**Soroush** — Montreal, Canada
 
 ## 📄 License
 
