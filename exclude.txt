@@ -1,0 +1,3 @@
+# Deals containing these words are ignored. Change with /block and /unblock.
+expired
+dead
