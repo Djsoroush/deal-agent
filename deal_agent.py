@@ -58,6 +58,9 @@ HELP = (
     "/unblock word - stop ignoring it\n"
     "/test word - search current deals now (e.g. /test shoes)\n"
     "/test - search current deals for all your interests\n"
+    "/watch link - watch a product page (Walmart etc.) and get told when it's\n"
+    "   back in stock or cheaper. Add a max price: /watch link 10\n"
+    "/watches - list your watched products\n"
     "/stop - pause your alerts (send /start to resume)\n"
     "/help - show this message\n\n"
     "Tip: deal titles use brand names, so add brands too (nike, asics, sony...).\n"
@@ -247,6 +250,45 @@ def handle_commands(state, users, tests):
             send(cid, f"📋 Your interests:\n{k}\n\n🚫 Blocked: {', '.join(ex) or '(none)'}")
         elif cmd == "/test":
             tests.append((cid, arg))
+        elif cmd == "/watch" and arg:
+            parts = text.split()[1:]
+            url = clean_url(parts[0])
+            target = None
+            if len(parts) > 1:
+                try:
+                    target = float(parts[1].replace("$", ""))
+                except ValueError:
+                    pass
+            watches = user.setdefault("watches", [])
+            if not url.startswith("http"):
+                send(cid, "Please send a full product link, e.g. /watch https://www.walmart.ca/en/ip/...")
+            elif any(w["url"] == url for w in watches):
+                send(cid, "You're already watching that product. Send /watches to see your list.")
+            elif len(watches) >= MAX_WATCHES:
+                send(cid, f"You can watch up to {MAX_WATCHES} products. Remove one first (/watches).")
+            else:
+                watches.append({"url": url, "target": target, "name": None,
+                                "status": None, "price": None, "new": True})
+        elif cmd == "/watches":
+            ws = user.get("watches", [])
+            if not ws:
+                send(cid, "You're not watching any products. Send /watch plus a product link.")
+            else:
+                lines = []
+                for i, w in enumerate(ws, 1):
+                    st = {"IN_STOCK": "🟢 in stock", "OUT_OF_STOCK": "🔴 out of stock"}.get(w["status"], "⚪ not checked yet")
+                    price = f"${w['price']:.2f}" if w.get("price") else "?"
+                    tgt = f", alert at ≤ ${w['target']:.2f}" if w.get("target") else ""
+                    lines.append(f"{i}. {w.get('name') or w['url']}\n   {price} - {st}{tgt}  /unwatch_{i}")
+                send(cid, "👀 Watched products:\n" + "\n".join(lines))
+        elif re.match(r"^/unwatch_\d+$", cmd):
+            i = int(cmd.split("_")[1]) - 1
+            ws = user.get("watches", [])
+            if 0 <= i < len(ws):
+                w = ws.pop(i)
+                send(cid, f"🗑 Stopped watching {w.get('name') or w['url']}.")
+            else:
+                send(cid, "That number is not in your list. Send /watches to see it.")
         else:
             send(cid, HELP + (OWNER_HELP if cid == OWNER else ""))
 
@@ -330,6 +372,122 @@ def send_new_deals(state, users, posts):
     print(f"{len(new)} new post(s), {sent} alert(s) sent.")
 
 
+# ---------------- product watching ----------------
+
+MAX_WATCHES = 20
+PAGE_HEADERS = {
+    "User-Agent": HEADERS["User-Agent"],
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "en-CA,en;q=0.9",
+}
+
+
+def clean_url(url):
+    """Remove tracking junk (?utm_..., affiliate IDs) from a product link."""
+    return url.split("?")[0].split("#")[0].strip()
+
+
+def _find_jsonld_product(obj):
+    if isinstance(obj, list):
+        for o in obj:
+            r = _find_jsonld_product(o)
+            if r:
+                return r
+    elif isinstance(obj, dict):
+        if obj.get("@type") in ("Product", ["Product"]):
+            return obj
+        for k in ("@graph", "mainEntity"):
+            if k in obj:
+                r = _find_jsonld_product(obj[k])
+                if r:
+                    return r
+    return None
+
+
+def check_product(url):
+    """Return {"name", "price", "was", "status"} or {"error": ...}."""
+    try:
+        r = requests.get(url, headers=PAGE_HEADERS, timeout=30)
+    except Exception as e:
+        return {"error": f"could not connect ({e.__class__.__name__})"}
+    html = r.text
+    if r.status_code != 200 or "Robot or human" in html or "px-captcha" in html:
+        return {"error": f"the store blocked the check (HTTP {r.status_code})"}
+
+    # 1) Walmart.ca: data is in the __NEXT_DATA__ script
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+    if m:
+        try:
+            p = json.loads(m.group(1))["props"]["pageProps"]["initialData"]["data"]["product"]
+            pi = p.get("priceInfo") or {}
+            return {"name": p.get("name"),
+                    "price": (pi.get("currentPrice") or {}).get("price"),
+                    "was": (pi.get("wasPrice") or {}).get("price"),
+                    "status": "IN_STOCK" if p.get("availabilityStatus") == "IN_STOCK" else "OUT_OF_STOCK"}
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    # 2) Most other stores: schema.org JSON-LD
+    for block in re.findall(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', html, re.S):
+        try:
+            prod = _find_jsonld_product(json.loads(block))
+        except ValueError:
+            continue
+        if prod:
+            offers = prod.get("offers") or {}
+            if isinstance(offers, list):
+                offers = offers[0] if offers else {}
+            avail = str(offers.get("availability", ""))
+            price = offers.get("price") or offers.get("lowPrice")
+            return {"name": prod.get("name"),
+                    "price": float(price) if price else None, "was": None,
+                    "status": "IN_STOCK" if "InStock" in avail else "OUT_OF_STOCK"}
+    return {"error": "could not find product info on that page"}
+
+
+def fmt_product(info, url):
+    price = f"${info['price']:.2f}" if info.get("price") else "price unknown"
+    was = f" (was ${info['was']:.2f})" if info.get("was") and info.get("price") and info["was"] > info["price"] else ""
+    return f"{info.get('name') or 'Product'}\n💲 {price}{was}\n{url}"
+
+
+def check_watches(users):
+    cache = {}
+    for cid, user in users.items():
+        if user["status"] != "approved":
+            continue
+        for w in user.get("watches", []):
+            url = w["url"]
+            if url not in cache:
+                cache[url] = check_product(url)
+                time.sleep(2)  # be gentle with the store
+            info = cache[url]
+            if "error" in info:
+                if w.get("new"):
+                    send(cid, f"⚠️ I couldn't check that product: {info['error']}.\n{url}")
+                    w["new"] = False
+                print("Watch error:", url, info["error"])
+                continue
+            st, price = info["status"], info.get("price")
+            stock_word = "🟢 In stock" if st == "IN_STOCK" else "🔴 Out of stock"
+            if w.get("new"):
+                tgt = f" I'll alert you when it's in stock at ${w['target']:.2f} or less." if w.get("target") else \
+                      " I'll alert you when it's back in stock or the price drops."
+                send(cid, f"👀 Now watching:\n{fmt_product(info, url)}\n{stock_word}.{tgt}")
+                w["new"] = False
+            else:
+                cheap_enough = w.get("target") is None or (price is not None and price <= w["target"])
+                back = st == "IN_STOCK" and w.get("status") != "IN_STOCK"
+                dropped = (price is not None and w.get("price") is not None and price < w["price"]
+                           and st == "IN_STOCK")
+                if back and cheap_enough:
+                    send(cid, f"🟢 BACK IN STOCK!\n{fmt_product(info, url)}")
+                elif dropped and cheap_enough:
+                    send(cid, f"📉 PRICE DROP! ${w['price']:.2f} → ${price:.2f}\n{fmt_product(info, url)}")
+            w.update({"name": info.get("name"), "status": st, "price": price})
+    print(f"Checked {len(cache)} watched product(s).")
+
+
 def main():
     if not TOKEN or not OWNER:
         raise SystemExit("Missing TELEGRAM_TOKEN or TELEGRAM_CHAT_ID secret.")
@@ -337,12 +495,18 @@ def main():
     users = load_users()
     tests = []
     handle_commands(state, users, tests)
-    manual = os.environ.get("TEST_SEARCH", "").strip().lower()
-    if manual:
-        tests.append((OWNER, "" if manual == "all" else manual))
+    manual = os.environ.get("TEST_SEARCH", "").strip()
+    if manual.startswith("http"):
+        info = check_product(clean_url(manual))
+        print("Product test:", info)
+        send(OWNER, "🧪 Product test:\n" + (f"⚠️ {info['error']}" if "error" in info else
+              fmt_product(info, clean_url(manual)) + f"\n{info['status']}"))
+    elif manual:
+        tests.append((OWNER, "" if manual.lower() == "all" else manual.lower()))
     posts = fetch_posts()
     run_tests(tests, users, posts)
     send_new_deals(state, users, posts)
+    check_watches(users)
     save_users(users)
     save_state(state)
     print(f"Users: {sum(u['status'] == 'approved' for u in users.values())} approved, "
