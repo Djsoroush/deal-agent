@@ -11,7 +11,7 @@ on:
         default: ""
 
 permissions:
-  contents: write             # needed to save keywords and seen deals
+  contents: write             # needed to save users and seen deals
 
 concurrency:
   group: deal-agent
@@ -29,7 +29,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install libraries
-        run: pip install feedparser requests
+        run: pip install feedparser requests cryptography
 
       - name: Run the agent
         env:
@@ -42,5 +42,5 @@ jobs:
         run: |
           git config user.name "deal-agent-bot"
           git config user.email "deal-agent-bot@users.noreply.github.com"
-          git add state.json keywords.txt exclude.txt
+          git add state.json users.enc
           git diff --cached --quiet || (git commit -m "Update deal agent state" && git push)
