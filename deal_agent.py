@@ -26,8 +26,10 @@ import feedparser
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 
+# (feed URL, label shown in alerts)
 FEEDS = [
-    "https://forums.redflagdeals.com/feed/forum/9",  # RedFlagDeals Hot Deals
+    ("https://forums.redflagdeals.com/feed/forum/9", "🔥"),  # RedFlagDeals forum: Hot Deals
+    ("https://www.redflagdeals.com/rss/deals.php?city=montreal&content_type=editorial", "📰"),  # RFD main site: editors' picks
 ]
 BOT_NAME = "Sheytoon Deal Agent"
 
@@ -258,7 +260,7 @@ def contains_any(text, words):
 
 def fetch_posts():
     posts = []
-    for url in FEEDS:
+    for url, icon in FEEDS:
         try:
             resp = requests.get(url, headers=HEADERS, timeout=30)
             resp.raise_for_status()
@@ -270,7 +272,8 @@ def fetch_posts():
         for e in entries:
             posts.append({"id": e.get("id") or e.get("link"),
                           "title": (e.get("title") or "").strip(),
-                          "link": e.get("link", "")})
+                          "link": e.get("link", ""),
+                          "icon": icon, "feed": url})
     return posts
 
 
@@ -294,24 +297,34 @@ def run_tests(tests, users, posts):
             continue
         send(cid, f"🧪 Test: {len(hits)} current deal(s) match {label}:")
         for p in hits:
-            send(cid, f"🔥 {p['title']}\n{p['link']}")
+            send(cid, f"{p['icon']} {p['title']}\n{p['link']}")
             time.sleep(0.5)
 
 
 def send_new_deals(state, users, posts):
     seen = set(state["seen"])
-    first_run = len(seen) == 0
-    new = [p for p in posts if p["id"] and p["id"] not in seen]
-    for p in new:
+    # A feed seen for the first time only gets "remembered", so users are not flooded.
+    known = set(state.get("feeds", []))
+    if not known and seen:
+        known.add(FEEDS[0][0])  # the forum feed was already running before this list existed
+    fetched = {p["feed"] for p in posts}
+    new = []
+    for p in posts:
+        if not p["id"] or p["id"] in seen:
+            continue
+        seen.add(p["id"])
         state["seen"].append(p["id"])
-    if first_run:
-        print(f"First run: remembered {len(new)} posts, no alerts.")
-        return
+        if p["feed"] in known:
+            new.append(p)
+    fresh = fetched - known
+    if fresh:
+        print(f"New feed(s) {sorted(fresh)}: remembered current posts, no alerts.")
+    state["feeds"] = sorted(known | fetched)
     sent = 0
     for p in new:
         for cid, user in users.items():
             if user["status"] == "approved" and wants(user, p["title"]):
-                send(cid, f"🔥 {p['title']}\n{p['link']}")
+                send(cid, f"{p['icon']} {p['title']}\n{p['link']}")
                 sent += 1
                 time.sleep(0.5)
     print(f"{len(new)} new post(s), {sent} alert(s) sent.")
