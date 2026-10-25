@@ -1,5 +1,5 @@
 /**
- * Sheytoon Deal Agent - Cloudflare Worker version 
+ * Sheytoon Deal Agent - Cloudflare Worker
  *
  * HOW IT WORKS
  *  - fetch():     Telegram "rings the doorbell" (webhook) -> instant replies, buttons.
@@ -36,9 +36,31 @@ const PICKS = [
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// ---------------------------------------------------------------- quiet hours
+const TZ = "America/Toronto";
+const QUIET_DEFAULT = { on: true, start: 23, end: 8 };
+const QUIET_PRESETS = [[22, 7], [23, 8], [0, 9], [1, 10]];
+const quietOf = (u) => u.quiet || QUIET_DEFAULT;
+const hourNow = () => +new Intl.DateTimeFormat("en-CA", { timeZone: TZ, hour: "numeric", hourCycle: "h23" }).format(new Date());
+const fmtH = (h) => `${String(h).padStart(2, "0")}:00`;
+function inQuiet(u, h = hourNow()) {
+  const q = quietOf(u);
+  if (!q.on || q.start === q.end) return false;
+  return q.start > q.end ? (h >= q.start || h < q.end) : (h >= q.start && h < q.end);
+}
+const quietLabel = (u) => { const q = quietOf(u); return q.on ? `${fmtH(q.start)} – ${fmtH(q.end)}` : "Off"; };
+
 const T = {
+  quiet: (u) => {
+    const q = quietOf(u);
+    return `🌙 <b>Quiet hours</b>\n\n` +
+      (q.on ? `Now: <b>${fmtH(q.start)} – ${fmtH(q.end)}</b> (Montreal time)\n\nDuring these hours I won't send alerts. ` +
+              `Deals I find are saved and sent as a ☀️ <b>morning summary</b> when quiet hours end.`
+            : `Now: <b>Off</b> — I send alerts any time, day or night.`) +
+      `\n\nPick new hours below, or type your own, e.g. <code>/quiet 22 7</code>`;
+  },
   welcomeNew: (name) =>
-    `👋 <b>Hey ${esc(name)}, welcome to ${BOT_NAME}!</b> 😈\n\n` +
+    `👋 <b>Hey ${esc(name)}, welcome to ${BOT_NAME}!</b> 😎\n\n` +
     `I'm your personal <b>deal hunter</b> for Canada 🇨🇦\n` +
     `I watch <b>RedFlagDeals</b> 24/7 and ping you the <b>moment</b> a deal matches what <i>you</i> love.\n\n` +
     `✨ <b>How it works</b>\n` +
@@ -51,13 +73,15 @@ const T = {
   approved: (name) =>
     `🎉 <b>You're in, ${esc(name)}!</b>\n\n` +
     `Let's set up your <b>deal radar</b> 📡\n` +
+    `I've started you with <b>Amazon, Walmart, Best Buy and Costco</b> — remove any you don't want in 📋 <b>My interests</b>.\n\n` +
     `• Tap <b>⭐ Quick picks</b> to choose popular interests\n` +
     `• Or tap <b>➕ Add interest</b> and type anything — a product, brand or store\n\n` +
     `<i>Tip: you can also just send me a word, like</i> <code>sony</code>`,
   menu: (u) =>
-    `😈 <b>${BOT_NAME}</b>\n\n` +
+    `😎 <b>${BOT_NAME}</b>\n\n` +
     `📡 Status: ${u.status === "stopped" ? "⏸ <b>Paused</b>" : "🟢 <b>Hunting deals</b>"}\n` +
-    `🎯 Following: <b>${u.keywords.length}</b> interest${u.keywords.length === 1 ? "" : "s"}\n\n` +
+    `🎯 Following: <b>${u.keywords.length}</b> interest${u.keywords.length === 1 ? "" : "s"}\n` +
+    `🌙 Quiet hours: <b>${quietLabel(u)}</b>\n\n` +
     `What would you like to do?`,
   picks: "⭐ <b>Quick picks</b>\nTap to turn interests <b>on ✅ / off</b>:",
   askAdd: "✍️ <b>Type what you want to follow</b>\nA product, brand or store — e.g. <code>ps5</code>, <code>nike</code>, <code>costco</code>",
@@ -77,6 +101,7 @@ const T = {
     `/unblock <i>word</i> — stop ignoring it\n` +
     `/test <i>word</i> — search current deals now\n` +
     `/stop · /start — pause or resume alerts\n` +
+    `/quiet — set your quiet hours (e.g. <code>/quiet 23 8</code>, or <code>/quiet off</code>)\n` +
     `/deleteme — erase all your data\n\n` +
     `💡 <b>Tip:</b> deal titles use <b>brand and store names</b> — add those for more alerts (sony, asics, costco…).`,
   ownerHelp:
@@ -92,11 +117,22 @@ const T = {
 
 const btn = (text, data) => ({ text, callback_data: data });
 const KB = {
+  quiet: (u) => {
+    const q = quietOf(u);
+    const rows = [];
+    for (let i = 0; i < QUIET_PRESETS.length; i += 2) {
+      rows.push(QUIET_PRESETS.slice(i, i + 2).map(([a, b], j) =>
+        btn(`${q.on && q.start === a && q.end === b ? "✅ " : ""}${fmtH(a)}–${fmtH(b)}`, `qh:${i + j}`)));
+    }
+    rows.push([btn(q.on ? "🔔 Turn off (alerts 24/7)" : "🌙 Turn on", "qtoggle"), btn("⬅️ Menu", "menu")]);
+    return { inline_keyboard: rows };
+  },
   menu: (u) => ({
     inline_keyboard: [
       [btn("⭐ Quick picks", "picks"), btn("➕ Add interest", "add")],
       [btn("📋 My interests", "list"), btn("🧪 Test now", "test")],
-      [btn(u.status === "stopped" ? "▶️ Resume alerts" : "⏸ Pause alerts", "toggle"), btn("❓ Help", "help")],
+      [btn(u.status === "stopped" ? "▶️ Resume alerts" : "⏸ Pause alerts", "toggle"), btn("🌙 Quiet hours", "quiet")],
+      [btn("❓ Help", "help")],
     ],
   }),
   picks: (u) => {
@@ -165,9 +201,30 @@ function unescapeHtml(s) {
   return s.trim();
 }
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Light stemmer so "towel" = "towels", "run" = "running", "box" = "boxes", "battery" = "batteries"
+function stem(w) {
+  if (/\d/.test(w)) return w;
+  if (w.length <= 3) return /^[a-z][a-z]s$/.test(w) && !/(ss|us|is|as|os)$/.test(w) ? w.slice(0, 2) : w; // tvs -> tv
+  const cut = (s, n) => s.slice(0, s.length - n);
+  if (/ies$/.test(w) && w.length > 4) w = cut(w, 3) + "y";
+  else if (/ves$/.test(w)) w = cut(w, 3) + "f";
+  else if (/(s|x|z|ch|sh)es$/.test(w)) w = cut(w, 2);
+  else if (/[^su]s$/.test(w)) w = cut(w, 1);
+  else if (/ing$/.test(w) && w.length >= 6) w = cut(w, 3);
+  else if (/ed$/.test(w) && w.length >= 5) w = cut(w, 2);
+  if (/([b-df-hj-np-tv-z])\1$/.test(w) && !/(ll|ss|ff|zz)$/.test(w)) w = cut(w, 1); // runn -> run
+  if (/e$/.test(w) && w.length > 3) w = cut(w, 1); // shoe/shoes, bake/baking
+  return w;
+}
+const stems = (s) => s.toLowerCase().replace(/['’]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean).map(stem);
 function containsAny(text, words) {
-  const t = text.toLowerCase();
-  return words.some((w) => new RegExp("\\b" + escapeRegex(w.toLowerCase()) + "\\b").test(t));
+  const t = stems(text);
+  return words.some((w) => {
+    const k = stems(w);
+    if (!k.length) return false;
+    for (let i = 0; i + k.length <= t.length; i++) if (k.every((x, j) => t[i + j] === x)) return true;
+    return false;
+  });
 }
 function wants(user, title, words) {
   words = words ?? user.keywords;
@@ -175,7 +232,8 @@ function wants(user, title, words) {
   if (user.exclude?.length && containsAny(title, user.exclude)) return false;
   return containsAny(title, words);
 }
-const newUser = (name, status) => ({ name, status, keywords: [], exclude: ["expired", "dead"] });
+const DEFAULT_INTERESTS = ["amazon", "walmart", "best buy", "costco"];
+const newUser = (name, status) => ({ name, status, keywords: [...DEFAULT_INTERESTS], exclude: ["expired", "dead"] });
 function displayName(from = {}) {
   let n = `${from.first_name || ""} ${from.last_name || ""}`.trim() || "Someone";
   if (from.username) n += ` (@${from.username})`;
@@ -218,7 +276,9 @@ function parseFeed(xml) {
     const title = unescapeHtml((b.match(/<title[^>]*>([\s\S]*?)<\/title>/) || [])[1] || "");
     const link = unescapeHtml((b.match(/<link[^>]*href="([^"]+)"/) || [])[1] || (b.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || "");
     const id = unescapeHtml((b.match(/<(?:id|guid)[^>]*>([\s\S]*?)<\/(?:id|guid)>/) || [])[1] || link);
-    if (title) posts.push({ id, title, link });
+    const d = (b.match(/<(?:published|updated|pubDate|dc:date)[^>]*>([\s\S]*?)<\//) || [])[1];
+    const time = d ? Date.parse(d.trim()) : NaN;
+    if (title) posts.push({ id, title, link, time });
   }
   return posts;
 }
@@ -232,6 +292,21 @@ async function fetchPosts() {
     } catch (e) { console.log("Could not read", f.url, String(e)); }
   }));
   return all;
+}
+
+// Show deals from the last few hours that match some words - instant proof the bot works.
+const RECENT_HOURS = 3;
+async function showRecent(env, cid, user, words) {
+  if (!words?.length) return;
+  const posts = await fetchPosts();
+  const since = Date.now() - RECENT_HOURS * 3600 * 1000;
+  const hits = posts.filter((p) => (isNaN(p.time) || p.time >= since) && wants(user, p.title, words));
+  const label = words.map((w) => `<b>${esc(w)}</b>`).join(", ");
+  if (!hits.length) {
+    return send(env, cid, `🔎 I checked the last ${RECENT_HOURS} hours for ${label} — nothing yet.\n📡 I'll ping you the moment a deal appears!`);
+  }
+  await send(env, cid, `🔎 <b>Found ${hits.length} deal${hits.length > 1 ? "s" : ""}</b> from the last ${RECENT_HOURS} hours for ${label}:`);
+  for (const p of hits.slice(0, 5)) await sendDeal(env, cid, p);
 }
 
 async function runTest(env, cid, user, word) {
@@ -302,10 +377,12 @@ async function handleMessage(env, msg) {
     added.forEach((w) => kw.push(w));
     changed = added.length > 0;
     await save();
-    return send(env, cid,
+    await send(env, cid,
       added.length ? `✅ <b>Added:</b> ${added.map(esc).join(", ")}\n🎯 You now follow <b>${kw.length}</b> interests. I'll ping you when a deal shows up!`
                    : `👍 You already follow <b>${words.map(esc).join(", ")}</b>.`,
       { reply_markup: KB.menu(user) });
+    if (added.length) await showRecent(env, cid, user, added);
+    return;
   }
 
   switch (cmd) {
@@ -334,6 +411,18 @@ async function handleMessage(env, msg) {
     case "/deleteme":
       if (cid === owner) return send(env, cid, "👑 You're the owner, so your data stays. Use /list to clear interests.");
       return send(env, cid, "⚠️ <b>Delete all your data?</b>\nThis removes your interests and your access to the bot.", { reply_markup: KB.confirmDelete });
+    case "/quiet": {
+      const a = arg.split(/[\s:-]+/).filter(Boolean);
+      if (a[0] === "off") { user.quiet = { ...quietOf(user), on: false }; changed = true; }
+      else if (a[0] === "on") { user.quiet = { ...quietOf(user), on: true }; changed = true; }
+      else if (a.length >= 2 && a.slice(0, 2).every((x) => /^\d{1,2}$/.test(x) && +x < 24)) {
+        user.quiet = { on: true, start: +a[0], end: +a[1] }; changed = true;
+      } else if (arg) {
+        return send(env, cid, "⏰ Please use hours from 0 to 23, e.g. <code>/quiet 23 8</code> or <code>/quiet off</code>.", { reply_markup: KB.quiet(user) });
+      }
+      await save();
+      return send(env, cid, (changed ? "✅ <b>Saved!</b>\n\n" : "") + T.quiet(user), { reply_markup: KB.quiet(user) });
+    }
     case "/privacy":
       return send(env, cid, T.privacy, { reply_markup: KB.back });
     default:
@@ -350,6 +439,7 @@ async function ownerAction(env, users, action, target, editRef) {
     t.status = "approved";
     await saveUsers(env, users);
     await send(env, target, T.approved(firstName(t)), { reply_markup: KB.menu(t) });
+    await showRecent(env, target, t, t.keywords);
     note = `✅ <b>Approved</b> ${esc(t.name)}`;
   } else if (action === "deny") {
     t.status = "denied"; await saveUsers(env, users);
@@ -388,11 +478,13 @@ async function handleCallback(env, cq) {
     else if (data === "picks") await edit(env, cid, mid, T.picks, KB.picks(user));
     else if (data.startsWith("pk:")) {
       const p = PICKS[+data.slice(3)];
+      let recent = null;
       if (p) {
         const i = kw.indexOf(p[2]);
-        if (i >= 0) { kw.splice(i, 1); toast = `Removed ${p[1]}`; } else { kw.push(p[2]); toast = `✅ ${p[1]} added`; }
+        if (i >= 0) { kw.splice(i, 1); toast = `Removed ${p[1]}`; } else { kw.push(p[2]); toast = `✅ ${p[1]} added`; recent = p[2]; }
         await saveUsers(env, users);
         await tg(env, "editMessageReplyMarkup", { chat_id: cid, message_id: mid, reply_markup: KB.picks(user) });
+        if (recent) { await tg(env, "answerCallbackQuery", { callback_query_id: cq.id, text: toast }); toast = null; await showRecent(env, cid, user, [recent]); }
       }
     } else if (data === "list") await edit(env, cid, mid, T.list(user), KB.list(user));
     else if (data.startsWith("rm:")) {
@@ -411,6 +503,16 @@ async function handleCallback(env, cq) {
       toast = user.status === "stopped" ? "⏸ Alerts paused" : "▶️ Alerts on";
       await saveUsers(env, users);
       await edit(env, cid, mid, T.menu(user), KB.menu(user));
+    } else if (data === "quiet") await edit(env, cid, mid, T.quiet(user), KB.quiet(user));
+    else if (data.startsWith("qh:")) {
+      const pr = QUIET_PRESETS[+data.slice(3)];
+      if (pr) { user.quiet = { on: true, start: pr[0], end: pr[1] }; toast = `🌙 Quiet ${fmtH(pr[0])}–${fmtH(pr[1])}`; await saveUsers(env, users); }
+      await edit(env, cid, mid, T.quiet(user), KB.quiet(user));
+    } else if (data === "qtoggle") {
+      const q = quietOf(user); user.quiet = { ...q, on: !q.on };
+      toast = user.quiet.on ? "🌙 Quiet hours on" : "🔔 Alerts 24/7";
+      await saveUsers(env, users);
+      await edit(env, cid, mid, T.quiet(user), KB.quiet(user));
     } else if (data === "help") await edit(env, cid, mid, T.help + (cid === owner ? T.ownerHelp : ""), KB.back);
     else if (data === "delyes" && cid !== owner) {
       delete users[cid]; await saveUsers(env, users);
@@ -424,6 +526,8 @@ async function handleCallback(env, cq) {
 // ---------------------------------------------------------------- timer (every minute)
 
 async function checkDeals(env) {
+  const hour = hourNow();
+  const held = {};
   const [state, users, posts] = await Promise.all([loadState(env), loadUsers(env), fetchPosts()]);
   const seen = new Set(state.seen);
   const known = new Set(state.feeds || []);
@@ -439,7 +543,25 @@ async function checkDeals(env) {
   let sent = 0;
   for (const p of fresh)
     for (const [cid, u] of Object.entries(users))
-      if (u.status === "approved" && wants(u, p.title)) { await sendDeal(env, cid, p); sent++; }
+      if (u.status === "approved" && wants(u, p.title)) {
+        if (inQuiet(u, hour)) { (held[cid] ||= []).push(p); }
+        else { await sendDeal(env, cid, p); sent++; }
+      }
+  // Save deals found during someone's quiet hours (max 15 per person).
+  for (const [cid, list] of Object.entries(held)) {
+    const old = (await env.DB.get("q:" + cid, "json")) || [];
+    await env.DB.put("q:" + cid, JSON.stringify([...old, ...list].slice(-15)));
+  }
+  // Quiet hours just ended -> send the morning summary.
+  for (const [cid, u] of Object.entries(users)) {
+    const q = quietOf(u);
+    if (u.status !== "approved" || !q.on || hour !== q.end) continue;
+    const list = await env.DB.get("q:" + cid, "json");
+    if (!list?.length) continue;
+    await env.DB.delete("q:" + cid);
+    await send(env, cid, `☀️ <b>Good morning!</b> While your quiet hours were on, I found <b>${list.length}</b> deal${list.length > 1 ? "s" : ""} for you:`);
+    for (const p of list) await sendDeal(env, cid, p);
+  }
   if (stateChanged) await saveState(env, state); // only write when something changed (free plan limit)
   console.log(`Read ${posts.length} posts, ${fresh.length} new, ${sent} alert(s) sent.`);
 }
@@ -458,13 +580,14 @@ async function setup(env, origin) {
     { command: "list", description: "📋 My interests" },
     { command: "test", description: "🧪 Search current deals now" },
     { command: "stop", description: "⏸ Pause alerts" },
+    { command: "quiet", description: "🌙 Quiet hours (no alerts at night)" },
     { command: "help", description: "❓ How to use the bot" },
     { command: "privacy", description: "🔐 What data is kept" },
     { command: "deleteme", description: "🗑 Erase my data" },
   ] });
   results.push(cmds.ok ? "✅ Command menu set" : "❌ Commands: " + cmds.description);
   const d = await tg(env, "setMyDescription", { description:
-    `😈 ${BOT_NAME} — your personal deal hunter for Canada 🇨🇦\n\n` +
+    `${BOT_NAME} — your personal deal hunter for Canada 🇨🇦\n\n` +
     `🔥 Watches RedFlagDeals 24/7\n⚡ Instant alerts for the things YOU love\n` +
     `🎯 AirPods, Nike, PS5, Costco… you choose\n🔐 Invite-only & private\n\nTap START to join! 👇` });
   results.push(d.ok ? "✅ Welcome card (before Start) set" : "❌ Description: " + d.description);
