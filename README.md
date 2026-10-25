@@ -4,7 +4,7 @@
 
 It watches [RedFlagDeals](https://forums.redflagdeals.com/hot-deals-f9/) (Canada's largest deal community) every minute and notifies each user the moment a deal matches *their* interests — AirPods, Nike, PS5, Costco, anything.
 
-👉 **Try it on Telegram:** [@sheytoon_deal_bot](https://t.me/sheytoon_deal_bot) *(invite-only: press Start and the owner approves you)*
+👉 **Try it on Telegram:** [@sheytoon_deals_bot](https://t.me/sheytoon_deals_bot) *(invite-only: press Start and the owner approves you)*
 
 ---
 
@@ -13,6 +13,10 @@ It watches [RedFlagDeals](https://forums.redflagdeals.com/hot-deals-f9/) (Canada
 - ⚡ **Instant replies** — Telegram webhooks, no polling (responds in under a second)
 - ⏱ **Checks deals every minute** with Cloudflare Cron Triggers
 - 👥 **Multi-user** — every user has their own interests and blocked words
+- 🎁 **Ready from day one** — new users start with Amazon, Walmart, Best Buy and Costco (editable)
+- 🔎 **Instant proof it works** — adding an interest immediately searches the last 3 hours of deals
+- 🧠 **Smart matching** — a light stemmer matches word forms: *towel = towels, run = running, battery = batteries*
+- 🌙 **Quiet hours** — no alerts at night (default 11 PM–8 AM, editable per user); held deals arrive in a morning summary
 - 🔐 **Invite-only** — the owner approves or denies new users with one tap
 - ⭐ **Interactive UI** — inline buttons, quick-pick interests, rich deal cards with a "View deal" button and image preview
 - 🧪 **Test search** — search current deals on demand
@@ -43,7 +47,8 @@ It watches [RedFlagDeals](https://forums.redflagdeals.com/hot-deals-f9/) (Canada
 **Design notes**
 - KV writes happen only when data changes, which keeps the bot well inside the free plan (1,000 writes/day).
 - A brand-new feed is "remembered" on its first read, so users never get flooded with old posts.
-- Keyword matching uses whole-word, case-insensitive regex, with per-user exclusion words.
+- Keyword matching is whole-word and case-insensitive, with a small stemmer for plurals, *-ing* and *-ed* forms, plus per-user exclusion words.
+- Deals found during a user's quiet hours are queued in KV and delivered together when the quiet period ends.
 
 ## 🤖 Bot commands
 
@@ -53,6 +58,7 @@ It watches [RedFlagDeals](https://forums.redflagdeals.com/hot-deals-f9/) (Canada
 | `/add word` *(or just type a word)* | Follow an interest |
 | `/list` | Your interests (tap ❌ to remove) |
 | `/test word` | Search current deals now |
+| `/quiet 23 8` · `/quiet off` | Set or turn off quiet hours |
 | `/block word` · `/unblock word` | Ignore deals containing a word |
 | `/stop` · `/start` | Pause or resume alerts |
 | `/privacy` · `/deleteme` | See what is stored · erase your data |
