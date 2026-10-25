@@ -1,4 +1,4 @@
-# 😈 Sheytoon Deal Agent
+# 😎 Sheytoon Deal Agent
 
 **A serverless Telegram bot that hunts Canadian deals 24/7 and sends instant, personalized alerts.**
 
